@@ -2,12 +2,14 @@ import logging
 import os
 import sys
 import time
+from http import HTTPStatus
+
 import requests
 from dotenv import load_dotenv
 from telebot import TeleBot
-from exceptions import (PracticumAPIError, TokenMissingError,
-                        InvalidHomeworkStatusError)
 
+from exceptions import (InvalidHomeworkStatusError, PracticumAPIError,
+                        TokenMissingError)
 
 load_dotenv()
 
@@ -18,19 +20,12 @@ TELEGRAM_CHAT_ID = os.getenv('TELEGRAM_CHAT_ID')
 RETRY_PERIOD = 600
 ENDPOINT = 'https://practicum.yandex.ru/api/user_api/homework_statuses/'
 HEADERS = {'Authorization': f'OAuth {PRACTICUM_TOKEN}'}
-PAYLOAD = {'from_date': int(time.time())}
 
 HOMEWORK_VERDICTS = {
     'approved': 'Работа проверена: ревьюеру всё понравилось. Ура!',
     'reviewing': 'Работа взята на проверку ревьюером.',
     'rejected': 'Работа проверена: у ревьюера есть замечания.'
 }
-
-logging.basicConfig(
-    level=logging.DEBUG,
-    format='%(asctime)s [%(levelname)s] %(message)s',
-    handlers=[logging.StreamHandler(sys.stdout)]
-)
 
 
 def check_tokens():
@@ -62,16 +57,15 @@ def get_api_answer(timestamp):
     """Получает ответ от API."""
     try:
         response = requests.get(
-            f'{ENDPOINT}', params={'from_date': timestamp}, headers=HEADERS
+            ENDPOINT, params={'from_date': timestamp}, headers=HEADERS
         )
-        if response.status_code != 200:
-            raise PracticumAPIError(
-                f'API вернул ошибку: {response.status_code}'
-            )
-
-        return response.json()
     except requests.exceptions.RequestException as e:
         raise PracticumAPIError(f'Ошибка при запросе к API: {e}')
+
+    if response.status_code != HTTPStatus.OK:
+        raise PracticumAPIError(f'API вернул ошибку: {response.status_code}')
+
+    return response.json()
 
 
 def check_response(response):
@@ -81,8 +75,8 @@ def check_response(response):
             f'Ответ должен быть словарем, но получен: {type(response)}'
         )
 
-    if 'homeworks' not in response or 'current_date' not in response:
-        raise KeyError('Отсутствуют ожидаемые ключи в ответе API')
+    if 'homeworks' not in response:
+        raise KeyError('Отсутствует ключ "homeworks" в ответе API')
 
     if not isinstance(response['homeworks'], list):
         raise TypeError('Ключ "homeworks" должен содержать список')
@@ -92,8 +86,11 @@ def check_response(response):
 
 def parse_status(homework):
     """Извлекает статус домашней работы."""
-    if 'homework_name' not in homework or 'status' not in homework:
-        raise KeyError('Отсутствуют ожидаемые ключи в ответе API')
+    if 'homework_name' not in homework:
+        raise KeyError('Отсутствует ключ "homework_name" в ответе API')
+
+    if 'status' not in homework:
+        raise KeyError('Отсутствует ключ "status" в ответе API')
 
     status = homework['status']
     homework_name = homework['homework_name']
@@ -136,9 +133,14 @@ def main():
                 logging.error(f'Сбой в работе бота: {error}')
         except Exception as error:
             logging.error(f'Необработанная ошибка: {error}')
-
-        time.sleep(RETRY_PERIOD)
+        finally:
+            time.sleep(RETRY_PERIOD)
 
 
 if __name__ == '__main__':
+    logging.basicConfig(
+        level=logging.DEBUG,
+        format='%(asctime)s [%(levelname)s] %(message)s',
+        handlers=[logging.StreamHandler(sys.stdout)]
+    )
     main()
